@@ -159,7 +159,7 @@ void spp_server_main(void)
     	reset_variables();
     	gecko_cmd_gatt_set_max_mtu(247);
 
-    	gecko_cmd_le_gap_set_mode(le_gap_general_discoverable, le_gap_undirected_connectable);
+    	gecko_cmd_le_gap_start_advertising(0, le_gap_general_discoverable, le_gap_undirected_connectable);
     	break;
 
 
@@ -201,7 +201,7 @@ void spp_server_main(void)
     	SLEEP_SleepBlockEnd(sleepEM2); // enable sleeping
 
     	/* restart advertising */
-    	gecko_cmd_le_gap_set_mode(le_gap_general_discoverable, le_gap_undirected_connectable);
+    	gecko_cmd_le_gap_start_advertising(0, le_gap_general_discoverable, le_gap_undirected_connectable);
     	break;
 
     case gecko_evt_gatt_server_characteristic_status_id:
@@ -216,9 +216,9 @@ void spp_server_main(void)
     			// Characteristic client configuration (CCC) for spp_data has been changed
     			if(pStatus->client_config_flags == gatt_notification)
     			{
-    				printf("SPP mode ON\r\n");
     				_main_state = STATE_SPP_MODE;
     				SLEEP_SleepBlockBegin(sleepEM2); // disable sleeping
+    				printf("SPP mode ON\r\n");
     			}
     			else
     			{

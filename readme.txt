@@ -1,7 +1,7 @@
 
-SPP-over-BLE example for BLE SDK 2.7.0
+SPP-over-BLE example for BLE SDK 2.11.0
 
---- how to set up the exmaple ----
+--- how to set up the example ----
 
 1) create "SoC Empty" example for your radio board
 
@@ -16,34 +16,23 @@ SPP-over-BLE example for BLE SDK 2.7.0
 
 2) copy attached files into the project directory:
 
+   app.c (overwrites the default app.c in the soc-empty project)
    spp_client_main.c 
    spp_server_main.c
    spp_utils.c 
    spp_utils.h   
-   
-3) copy serial drivers from SDK installation tree to your project directory:
-   source directory: C:\SiliconLabs\SimplicityStudio\v4\developer\sdks\gecko_sdk_suite\v2.1\hardware\kit\common\drivers\
-   
-   copy following files to your project:
-        retargetio.c 
-        retargetserial.c 
-        retargetserial.h
-		   
-4) edit the file hal-config.h in the project directory as follows:
+   		   
+3) edit the file app.h in the project root directory as follows:
 
- #define HAL_VCOM_ENABLE                   (1)
+ #define DEBUG_LEVEL 1
  
- (value of HAL_VCOM_ENABLE is changed from 0 to 1)
+ (value of DEBUG_LEVEL is changed from 0 to 1)
  
-5) edit the main.c of your project as follows:
+That's it! When you program the application to your development kit, you should see this print at the serial 
+output:
+>* SPP server mode *
 
-  * add #include "spp_utils.h" in the beginning of main.c
-  
-  * add following line after gecko_init() and before the infinite while(1) loop in main.c:
-  
-    spp_main();
-
-  This will start the SPP example main loop instead of running the default main loop of the SoC-empty example.
-
-  
+Keeping button PB0 or PB1 pressed during reset will select client mode, in that case the print will be:
+>* SPP client mode *
+ 
 -------

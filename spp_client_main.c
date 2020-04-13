@@ -199,7 +199,7 @@ void button_poll(void)
 	  {
 		  if(_conn_handle != 0xFF)
 		  {
-			  gecko_cmd_endpoint_close(_conn_handle);
+			  gecko_cmd_le_connection_close(_conn_handle);
 			  _main_state = DISCONNECTING;
 		  }
 	  }
@@ -245,8 +245,8 @@ void spp_client_main(void)
 
     	gecko_cmd_gatt_set_max_mtu(247);
 
-    	// start discovery
-    	gecko_cmd_le_gap_discover(le_gap_discover_generic);
+    	// start discovery using the default 1M PHY
+    	gecko_cmd_le_gap_start_discovery(1, le_gap_discover_generic);
     	_main_state = SCANNING;
     	break;
 
@@ -255,15 +255,22 @@ void spp_client_main(void)
     	// process scan responses: this function returns 1 if we found the service we are looking for
     	if(process_scan_response(&(evt->data.evt_le_gap_scan_response)) > 0)
     	{
-    		struct gecko_msg_le_gap_open_rsp_t *pResp;
+    		struct gecko_msg_le_gap_connect_rsp_t *pResp;
 
     		// match found -> stop discovery and try to connect
     		gecko_cmd_le_gap_end_procedure();
 
-    		pResp = gecko_cmd_le_gap_open(evt->data.evt_le_gap_scan_response.address, evt->data.evt_le_gap_scan_response.address_type);
+    		pResp = gecko_cmd_le_gap_connect(evt->data.evt_le_gap_scan_response.address, evt->data.evt_le_gap_scan_response.address_type, 1);
 
+    		if(pResp->result == bg_err_success)
+    		{
     		// make copy of connection handle for later use (for example, to cancel the connection attempt)
     		_conn_handle = pResp->connection;
+    		}
+    		else
+    		{
+    			printf("gecko_cmd_le_gap_connect failed with code 0x%4.4x\r\n", pResp->result);
+    		}
 
     	}
     	break;
@@ -344,7 +351,7 @@ void spp_client_main(void)
     		{
     			// no service found -> disconnect
     			printf("SPP service not found?\r\n");
-    			gecko_cmd_endpoint_close(_conn_handle);
+    			gecko_cmd_le_connection_close(_conn_handle);
     		}
 
     		break;
@@ -360,7 +367,7 @@ void spp_client_main(void)
     		{
     			// no characteristic found? -> disconnect
     			printf("SPP char not found?\r\n");
-    			gecko_cmd_endpoint_close(_conn_handle);
+    			gecko_cmd_le_connection_close(_conn_handle);
     		}
     		break;
 
@@ -407,7 +414,8 @@ void spp_client_main(void)
     		switch (evt->data.evt_hardware_soft_timer.handle) {
 
     		case RESTART_TIMER:
-    			gecko_cmd_le_gap_discover(le_gap_discover_generic);
+    			// restart discovery using the default 1M PHY
+    			gecko_cmd_le_gap_start_discovery(1, le_gap_discover_generic);
     			_main_state = SCANNING;
     			break;
 
