@@ -12,7 +12,6 @@
  **************************************************************************************************/
 
 /* Board headers */
-#include "boards.h"
 #include "ble-configuration.h"
 #include "board_features.h"
 
@@ -21,19 +20,11 @@
 #include "native_gecko.h"
 #include "gatt_db.h"
 
-/* Libraries containing default Gecko configuration values */
-
-#ifdef FEATURE_BOARD_DETECTED
-#include "bspconfig.h"
-#include "pti.h"
-#endif
-
-
-
-
 #include <stdio.h>
 #include "retargetserial.h"
 #include "sleep.h"
+#include "spp_utils.h"
+#include "em_usart.h"
 
 /***************************************************************************************************
   Local Macros and Definitions
@@ -45,9 +36,8 @@
 #define FIND_CHAR		3
 #define ENABLE_NOTIF 	4
 #define DATA_MODE		5
+#define DISCONNECTING   6
 
-// const uint8 serviceUUID[2] = {0x09, 0x18}; // HTM service UUID : 0x1809
-// const uint8 charUUID[2] = {0x1C, 0x2A}; // temp.meas UUID : 0x2A1C
 
 // SPP service UUID: 4880c12c-fdcb-4077-8920-a450d7f9b907
 const uint8 serviceUUID[16] = {0x07, 0xb9, 0xf9, 0xd7, 0x50, 0xa4, 0x20, 0x89, 0x77, 0x40, 0xcb, 0xfd, 0x2c, 0xc1, 0x80, 0x48};
@@ -55,8 +45,13 @@ const uint8 serviceUUID[16] = {0x07, 0xb9, 0xf9, 0xd7, 0x50, 0xa4, 0x20, 0x89, 0
 // SPP data UUID: fec26ec4-6d71-4442-9f81-55bc21d658d6
 const uint8 charUUID[16] = {0xd6, 0x58, 0xd6, 0x21, 0xbc, 0x55, 0x81, 0x9f, 0x42, 0x44, 0x71, 0x6d, 0xc4, 0x6e, 0xc2, 0xfe};
 
-#define RESTART_TIMER 1
-#define SPP_TX_TIMER  2
+/* soft timer handles */
+#define RESTART_TIMER    1
+#define GPIO_POLL_TIMER  3
+
+/* maximum number of iterations when polling UART RX data before sending data over BLE connection
+ * set value to 0 to disable optimization -> minimum latency but may decrease throughput */
+#define UART_POLL_TIMEOUT  5000
 
 /***************************************************************************************************
  Local Variables
@@ -66,6 +61,12 @@ static int _main_state;
 static uint32 _service_handle;
 static uint16 _char_handle;
 
+tsCounters _sCounters;
+
+/* default maximum packet size is 20 bytes. this is adjusted after connection is opened based
+ * on the connection parameters */
+static uint8 _max_packet_size = 20;
+static uint8 _min_packet_size = 20; /* target minimum bytes for one packet */
 
 static void reset_variables()
 {
@@ -73,6 +74,11 @@ static void reset_variables()
 	_main_state = DISCONNECTED;
 	_service_handle = 0;
 	_char_handle = 0;
+
+	_max_packet_size = 20;
+
+	memset(&_sCounters, 0, sizeof(_sCounters));
+
 }
 
 
@@ -116,23 +122,6 @@ static int process_scan_response(struct gecko_msg_le_gap_scan_response_evt_t *pR
         	}
         }
 
-        /*
-        if (ad_type == 0x02 || ad_type == 0x03)
-        {
-            // type 0x02 = Incomplete List of 16-bit Service Class UUIDs
-            // type 0x03 = Complete List of 16-bit Service Class UUIDs
-
-            // note: this check assumes that the service we are looking for is first
-            // in the list. To be fixed so that there is no such limitation...
-            if(memcmp(serviceUUID, &(pResp->data.data[i+2]),2) == 0)
-            {
-            	printf("Found HTM device");
-            	///ad_match_found = 1;
-            }
-
-        }
-*/
-
         //jump to next AD record
         i = i + ad_len + 1;
     }
@@ -140,26 +129,41 @@ static int process_scan_response(struct gecko_msg_le_gap_scan_response_evt_t *pR
     return(ad_match_found);
 }
 
+
 /* this is called periodically when SPP data mode is active */
 static void send_spp_data()
 {
 	uint8 len = 0;
-	uint8 data[20];
+	uint8 data[256];
 	uint16 result;
 	int c;
+	int timeout = 0;
 
-	// read up to 20 characters from local buffer
-	while(len < 20)
+	// read up to _max_packet_size characters from local buffer
+	while(len < _max_packet_size)
 	{
 		  c = RETARGET_ReadChar();
 
-		  if(c < 0)
+		  if(c > 0)
 		  {
-			  break;
+			  data[len++] = (uint8)c;
+		  }
+		  else if(len == 0)
+		  {
+			  /* if the first ReadChar() fails then return immediately */
+			  return;
 		  }
 		  else
 		  {
-			  data[len++] = (uint8)c;
+			  /* speed optimization: if there are some bytes to be sent but the length is still
+			   * below the preferred minimum packet size, then wait for additional bytes
+			   * until timeout. Target is to put as many bytes as possible into each air packet */
+
+			  // conditions for exiting the while loop and proceed to send data:
+			  if(timeout++ > UART_POLL_TIMEOUT)
+				  break;
+			  else if(len >= _min_packet_size)
+				  break;
 		  }
 	}
 
@@ -169,14 +173,36 @@ static void send_spp_data()
 		do
 		{
 			result = gecko_cmd_gatt_write_characteristic_value_without_response(_conn_handle, _char_handle, len, data)->result;
+			_sCounters.num_writes++;
 		}
 		while(result == bg_err_out_of_memory);
 		if(result != 0)
 		{
-			printf("WTF: %x\r\n", result);
+			printf("unexpected error: %x\r\n", result);
+		}
+		else
+		{
+			_sCounters.num_pack_sent++;
+			_sCounters.num_bytes_sent += len;
 		}
 	}
 
+}
+
+/*
+ * This function is called periodically to poll PB0, PB1 GPIO inputs
+ *
+ */
+void button_poll(void)
+{
+	  if((GPIO_PinInGet(BSP_BUTTON0_PORT, BSP_BUTTON0_PIN) == 0) || (GPIO_PinInGet(BSP_BUTTON1_PORT, BSP_BUTTON1_PIN) == 0))
+	  {
+		  if(_conn_handle != 0xFF)
+		  {
+			  gecko_cmd_endpoint_close(_conn_handle);
+			  _main_state = DISCONNECTING;
+		  }
+	  }
 }
 
 /**
@@ -184,15 +210,29 @@ static void send_spp_data()
  */
 void spp_client_main(void)
 {
+	int i;
 
-	char printbuf[128];
+	while (1) {
+		/* Event pointer for handling events */
+		struct gecko_cmd_packet* evt;
 
-  while (1) {
-    /* Event pointer for handling events */
-    struct gecko_cmd_packet* evt;
-    
-    /* Check for stack event. */
-    evt = gecko_wait_event();
+		if(_main_state == DATA_MODE)
+		{
+			/* if SPP data mode is active, use non-blocking gecko_peek_event() */
+			evt = gecko_peek_event();
+
+			if(evt == NULL)
+			{
+				/* no stack events to be handled -> send data from local TX buffer */
+				send_spp_data();
+				continue;  /* jump directly to next iteration i.e. call gecko_peek_event() again */
+			}
+		}
+		else
+		{
+			/* SPP data mode not active -> check for stack events using the blocking API */
+			evt = gecko_wait_event();
+		}
 
     /* Handle events */
     switch (BGLIB_MSG_ID(evt->header)) {
@@ -203,8 +243,11 @@ void spp_client_main(void)
 
     	reset_variables();
 
+    	gecko_cmd_gatt_set_max_mtu(247);
+
     	// start discovery
     	gecko_cmd_le_gap_discover(le_gap_discover_generic);
+    	_main_state = SCANNING;
     	break;
 
     case gecko_evt_le_gap_scan_response_id:
@@ -230,6 +273,9 @@ void spp_client_main(void)
 
     	printf("connected\r\n");
 
+    	// start timer for periodically polling button inputs
+		gecko_cmd_hardware_set_soft_timer(32768/10, GPIO_POLL_TIMER, 0);
+
     	//	 start service discovery (we are only interested in one UUID)
     	gecko_cmd_gatt_discover_primary_services_by_uuid(_conn_handle, 16, serviceUUID);
     	_main_state = FIND_SERVICE;
@@ -239,9 +285,15 @@ void spp_client_main(void)
     case gecko_evt_le_connection_closed_id:
     	printf("DISCONNECTED!\r\n");
 
+    	_main_state = DISCONNECTED;
+
+    	/* show statistics (rx/tx counters) after disconnect: */
+    	printStats(&_sCounters);
+
     	reset_variables();
-    	// stop TX timer:
-    	gecko_cmd_hardware_set_soft_timer(0, SPP_TX_TIMER, 0);
+
+    	// stop GPIO poll timer:
+    	gecko_cmd_hardware_set_soft_timer(0, GPIO_POLL_TIMER, 0);
 
     	SLEEP_SleepBlockEnd(sleepEM2); // enable sleeping after disconnect
 
@@ -254,6 +306,15 @@ void spp_client_main(void)
        	evt->data.evt_le_connection_parameters.interval,
    		evt->data.evt_le_connection_parameters.txsize);
        	break;
+
+    case gecko_evt_gatt_mtu_exchanged_id:
+    	/* calculate maximum data per one notification / write-without-response, this depends on the MTU.
+    	 * up to ATT_MTU-3 bytes can be sent at once  */
+    	_max_packet_size = evt->data.evt_gatt_mtu_exchanged.mtu - 3;
+    	_min_packet_size = _max_packet_size; /* try to send maximum length packets whenever possible */
+    	printf("MTU exchanged: %d\r\n", evt->data.evt_gatt_mtu_exchanged.mtu);
+
+    	break;
 
     case gecko_evt_gatt_service_id:
 
@@ -306,8 +367,6 @@ void spp_client_main(void)
     	case ENABLE_NOTIF:
     		_main_state = DATA_MODE;
     		printf("SPP mode ON\r\n");
-    		// start soft timer that is used to offload local TX buffer
-    		gecko_cmd_hardware_set_soft_timer(328, SPP_TX_TIMER, 0);
     		SLEEP_SleepBlockBegin(sleepEM2); // disable sleeping when SPP mode active
     		break;
 
@@ -333,11 +392,12 @@ void spp_client_main(void)
 
     		if(evt->data.evt_gatt_characteristic_value.characteristic == _char_handle)
     		{
-    			// data received from SPP server -> print to UART
-    			// NOTE: this works only with text (no binary) because printf() expects null-terminated strings as input
-    			memcpy(printbuf, evt->data.evt_gatt_characteristic_value.value.data, evt->data.evt_gatt_characteristic_value.value.len);
-    			printbuf[evt->data.evt_gatt_characteristic_value.value.len] = 0;
-    			printf(printbuf);
+    	    	 for(i=0;i<evt->data.evt_gatt_server_attribute_value.value.len;i++)
+    	    	 {
+    	    		 USART_Tx(RETARGET_UART, evt->data.evt_gatt_server_attribute_value.value.data[i]);
+    	    	 }
+    	    	 _sCounters.num_pack_received++;
+    	    	 _sCounters.num_bytes_received += evt->data.evt_gatt_server_attribute_value.value.len;
     		}
     		break;
 
@@ -346,13 +406,13 @@ void spp_client_main(void)
 
     		switch (evt->data.evt_hardware_soft_timer.handle) {
 
-    		case SPP_TX_TIMER:
-    			// send data from local TX buffer
-    			send_spp_data();
-    			break;
-
     		case RESTART_TIMER:
     			gecko_cmd_le_gap_discover(le_gap_discover_generic);
+    			_main_state = SCANNING;
+    			break;
+
+    		case GPIO_POLL_TIMER:
+    			button_poll();
     			break;
 
     		default:
