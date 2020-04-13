@@ -144,7 +144,7 @@ static void send_spp_data()
 	{
 		  c = RETARGET_ReadChar();
 
-		  if(c > 0)
+		  if(c >= 0)
 		  {
 			  data[len++] = (uint8)c;
 		  }
