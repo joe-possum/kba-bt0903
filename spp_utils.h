@@ -6,6 +6,7 @@ extern "C" {
 #endif
 
 #include "bg_types.h"
+#include "app.h"
 
 typedef struct
 {
@@ -13,7 +14,7 @@ typedef struct
 	uint32 num_bytes_sent;
 	uint32 num_pack_received;
 	uint32 num_bytes_received;
-	uint32 num_writes; /* total number of send attempts */
+	uint32 num_writes; /* Total number of send attempts */
 } tsCounters;
 
 /*
@@ -32,7 +33,7 @@ extern volatile int rxOverFlow;
 void spp_main(void);
 void printStats(tsCounters *psCounters);
 
-/* prototypes of SPP main functions (client / server role) */
+/* Prototypes of SPP main functions (client / server role) */
 void spp_client_main(void);
 void spp_server_main(void);
 

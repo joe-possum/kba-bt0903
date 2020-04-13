@@ -37,6 +37,6 @@ void appMain(gecko_configuration_t *pconfig)
   /* Initialize stack */
   gecko_init(pconfig);
 
-  /*  jump to spp program main loop */
+  /*  jump to SPP program main loop */
   spp_main();
 }

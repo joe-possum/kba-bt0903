@@ -1,6 +1,6 @@
 /***********************************************************************************************//**
  * \file   spp_utils.c
- * \brief  Generic utils used by the SPP server and client
+ * \brief  Generic utilities used by the SPP server and client
  *
  *
  ***************************************************************************************************
@@ -13,6 +13,7 @@
 
 #include "spp_utils.h"
 #include <stdio.h>
+
 
 /* needed for board specific GPIO mappings :*/
 #include "hal-config-board.h"
@@ -30,44 +31,36 @@
  * */
 void spp_main(void)
 {
-	RETARGET_SerialInit();
-
 	GPIO_PinModeSet(BSP_BUTTON0_PORT, BSP_BUTTON0_PIN, gpioModeInput, 1);
 	GPIO_PinModeSet(BSP_BUTTON1_PORT, BSP_BUTTON1_PIN, gpioModeInput, 1);
 
-	/* keeping either PB0 or PB1 pressed during reboot selects 'client mode' */
-	if((GPIO_PinInGet(BSP_BUTTON0_PORT, BSP_BUTTON0_PIN) == 0) || (GPIO_PinInGet(BSP_BUTTON1_PORT, BSP_BUTTON1_PIN) == 0))
-	{
-		printf("* SPP client mode *\r\n");
+	/* Keeping either PB0 or PB1 pressed during reboot selects 'client mode' */
+	if((GPIO_PinInGet(BSP_BUTTON0_PORT, BSP_BUTTON0_PIN) == 0) || (GPIO_PinInGet(BSP_BUTTON1_PORT, BSP_BUTTON1_PIN) == 0)) {
+		printLog("* SPP client mode *\r\n");
 		spp_client_main();
-	}
-	else
-	{
-		printf("* SPP server mode *\r\n");
+	} else {
+		printLog("* SPP server mode *\r\n");
 		spp_server_main();
 	}
 }
 
 void printStats(tsCounters *psCounters)
 {
-	printf("Outgoing data:\r\n");
-	printf(" bytes/packets sent: %d / %d ", psCounters->num_bytes_sent, psCounters->num_pack_sent);
-	printf(", num writes: %d\r\n", psCounters->num_writes);
+	printLog("Outgoing data:\r\n");
+	printLog(" bytes/packets sent: %lu / %lu ", psCounters->num_bytes_sent, psCounters->num_pack_sent);
+	printLog(", num writes: %lu\r\n", psCounters->num_writes);
 #ifdef RX_OVERFLOW_TRACKING
-	if(rxOverFlow)
-	{
-		printf(" NOTE: RX buffer overflowed %d times\r\n", rxOverFlow);
-	}
-	else
-	{
-		printf(" no RX buffer overflow detected\r\n");
+	if(rxOverFlow) {
+		printLog(" NOTE: RX buffer overflowed %d times\r\n", rxOverFlow);
+	} else {
+		printLog(" No RX buffer overflow detected\r\n");
 	}
 #else
-	printf("(RX buffer overflow is not tracked)\r\n");
+	printLog("(RX buffer overflow is not tracked)\r\n");
 #endif
 
-	printf("Incoming data:\r\n");
-	printf(" bytes/packets received: %d / %d\r\n", psCounters->num_bytes_received, psCounters->num_pack_received);
+	printLog("Incoming data:\r\n");
+	printLog(" bytes/packets received: %lu / %lu\r\n", psCounters->num_bytes_received, psCounters->num_pack_received);
 
 	return;
 }
